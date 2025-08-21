@@ -1,5 +1,4 @@
 import collections
-import pickle
 from functools import partial as bind
 
 import elements
@@ -41,7 +40,9 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
           episode.add(f'policy_{key}', value, agg='stack')
       elif key.startswith('log/'):
         assert value.ndim == 0, (key, value.shape, value.dtype)
-        episode.add(key, value, agg=('avg', 'max', 'sum'))
+        episode.add(key + '/avg', value, agg='avg')
+        episode.add(key + '/max', value, agg='max')
+        episode.add(key + '/sum', value, agg='sum')
     if tran['is_last']:
       result = episode.result()
       logger.add({
@@ -79,13 +80,13 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
       train_agg.add(mets, prefix='train')
   driver.on_step(trainfn)
 
-  cp = elements.Checkpoint(logdir / 'checkpoint.pkl')
+  cp = elements.Checkpoint(logdir / 'ckpt')
   cp.step = step
   cp.agent = agent
   cp.replay = replay
   if args.from_checkpoint:
-    data = pickle.loads(elements.Path(args.from_checkpoint).read_bytes())
-    agent.load(data['model'], regex=args.from_checkpoint_regex)
+    elements.checkpoint.load(args.from_checkpoint, dict(
+        agent=bind(agent.load, regex=args.from_checkpoint_regex)))
   cp.load_or_save()
 
   print('Start training loop')

@@ -1,7 +1,7 @@
 import collections
-import pickle
 import threading
 import time
+from functools import partial as bind
 
 import cloudpickle
 import elements
@@ -138,11 +138,11 @@ def parallel_learner(agent, barrier, args):
   fps = elements.FPS()
   batch_steps = args.batch_size * args.batch_length
 
-  cp = elements.Checkpoint(elements.Path(args.logdir) / 'agent.pkl')
+  cp = elements.Checkpoint(elements.Path(args.logdir) / 'ckpt/agent')
   cp.agent = agent
   if args.from_checkpoint:
-    data = pickle.loads(elements.Path(args.from_checkpoint).read_bytes())
-    agent.load(data['model'], regex=args.from_checkpoint_regex)
+    elements.checkpoint.load(args.from_checkpoint, dict(
+        agent=bind(agent.load, regex=args.from_checkpoint_regex)))
   cp.load_or_save()
   logger = portal.Client(args.logger_addr, 'LearnerLogger', maxinflight=1)
   updater = portal.Client(
@@ -284,7 +284,7 @@ def parallel_replay(make_replay_train, make_replay_eval, make_stream, args):
     return next(stream_eval)
 
   should_save = embodied.LocalClock(args.save_every)
-  cp = elements.Checkpoint(elements.Path(args.logdir) / 'replay.pkl')
+  cp = elements.Checkpoint(elements.Path(args.logdir) / 'ckpt/replay')
   cp.replay_train = replay_train
   cp.replay_eval = replay_eval
   cp.limiter = limiter
@@ -325,7 +325,7 @@ def parallel_logger(make_logger, args):
 
   active = elements.Counter()
   should_save = embodied.LocalClock(args.save_every)
-  cp = elements.Checkpoint(elements.Path(args.logdir) / 'logger.pkl')
+  cp = elements.Checkpoint(elements.Path(args.logdir) / 'ckpt/logger')
   cp.step = logger.step
   cp.load_or_save()
 
@@ -370,7 +370,9 @@ def parallel_logger(make_logger, args):
             episode.add(f'policy_{key}', value, agg='stack')
         elif key.startswith('log/'):
           assert value.ndim == 0, (key, value.shape, value.dtype)
-          episode.add(key, value, agg=('avg', 'max', 'sum'))
+          episode.add(key + '/avg', value, agg='avg')
+          episode.add(key + '/max', value, agg='max')
+          episode.add(key + '/sum', value, agg='sum')
       if tran['is_last']:
         result = episode.result()
         logger.add({
