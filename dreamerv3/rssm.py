@@ -117,7 +117,7 @@ class RSSM(nj.Module):
       # return carry, entries, feat, action
       return carry, feat, action
 
-  def loss(self, carry, tokens, acts, reset, training):
+  def loss(self, carry, tokens, acts, reset, x_mask, training):
     metrics = {}
     carry, entries, feat = self.observe(carry, tokens, acts, reset, training)
     prior = self._prior(feat['deter'])
@@ -128,8 +128,8 @@ class RSSM(nj.Module):
       dyn = jnp.maximum(dyn, self.free_nats)
       rep = jnp.maximum(rep, self.free_nats)
     losses = {'dyn': dyn, 'rep': rep}
-    metrics['dyn_ent'] = self._dist(prior).entropy().mean()
-    metrics['rep_ent'] = self._dist(post).entropy().mean()
+    metrics['dyn_ent'] = (self._dist(prior).entropy() * x_mask).sum() / x_mask.sum()
+    metrics['rep_ent'] = (self._dist(post).entropy() * x_mask).sum() / x_mask.sum()
     return carry, entries, losses, feat, metrics
 
   def _core(self, deter, stoch, action):

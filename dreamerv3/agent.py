@@ -89,8 +89,7 @@ class Agent(embodied.jax.Agent):
   @property
   def ext_space(self):
     spaces = {}
-    spaces['consec'] = elements.Space(np.int32)
-    spaces['stepid'] = elements.Space(np.uint8, 20)
+    spaces['mask'] = elements.Space(bool)
     if self.config.replay_context:
       spaces.update(elements.tree.flatdict(dict(
           enc=self.enc.entry_space,
@@ -132,28 +131,23 @@ class Agent(embodied.jax.Agent):
     if self.config.replay_context:
       out.update(elements.tree.flatdict(dict(
           enc=enc_entry, dyn=dyn_entry, dec=dec_entry)))
+    # debug
+    #print(out.keys())
+    #print('in agent.policy')
     return carry, act, out
 
   def train(self, carry, data):
-    carry, obs, prevact, stepid = self._apply_replay_context(carry, data)
+    carry, obs, prevact = self._apply_replay_context(carry, data)
+    x_mask = data['mask']
     metrics, (carry, entries, outs, mets) = self.opt(
-        self.loss, carry, obs, prevact, training=True, has_aux=True)
+        self.loss, carry, obs, prevact, x_mask, training=True, has_aux=True)
     metrics.update(mets)
     self.slowval.update()
     outs = {}
-    if self.config.replay_context:
-      updates = elements.tree.flatdict(dict(
-          stepid=stepid, enc=entries[0], dyn=entries[1], dec=entries[2]))
-      B, T = obs['is_first'].shape
-      assert all(x.shape[:2] == (B, T) for x in updates.values()), (
-          (B, T), {k: v.shape for k, v in updates.items()})
-      outs['replay'] = updates
-    # if self.config.replay.fracs.priority > 0:
-    #   outs['replay']['priority'] = losses['model']
     carry = (*carry, {k: data[k][:, -1] for k in self.act_space})
     return carry, outs, metrics
 
-  def loss(self, carry, obs, prevact, training):
+  def loss(self, carry, obs, prevact, x_mask, training):
     enc_carry, dyn_carry, dec_carry = carry
     reset = obs['is_first']
     B, T = reset.shape
@@ -164,7 +158,7 @@ class Agent(embodied.jax.Agent):
     enc_carry, enc_entries, tokens = self.enc(
         enc_carry, obs, reset, training)
     dyn_carry, dyn_entries, los, repfeat, mets = self.dyn.loss(
-        dyn_carry, tokens, prevact, reset, training)
+        dyn_carry, tokens, prevact, reset, x_mask, training)
     losses.update(los)
     metrics.update(mets)
     dec_carry, dec_entries, recons = self.dec(
@@ -184,10 +178,12 @@ class Agent(embodied.jax.Agent):
     B, T = reset.shape
     shapes = {k: v.shape for k, v in losses.items()}
     assert all(x == (B, T) for x in shapes.values()), ((B, T), shapes)
+    losses = {k: v * x_mask for k, v in losses.items()}
 
     # Imagination
     K = min(self.config.imag_last or T, T)
     H = self.config.imag_length
+    y_mask = x_mask[:, -K:]
     starts = self.dyn.starts(dyn_entries, dyn_carry, K)
     policyfn = lambda feat: sample(self.pol(self.feat2tensor(feat), 1))
     _, imgfeat, imgprevact = self.dyn.imagine(starts, policyfn, H, training)
@@ -201,6 +197,7 @@ class Agent(embodied.jax.Agent):
     assert all(x.shape[:2] == (B * K, H + 1) for x in jax.tree.leaves(imgact))
     inp = self.feat2tensor(imgfeat)
     los, imgloss_out, mets = imag_loss(
+        y_mask,
         imgact,
         self.rew(inp, 2).pred(),
         self.con(inp, 2).prob(1),
@@ -212,7 +209,7 @@ class Agent(embodied.jax.Agent):
         contdisc=self.config.contdisc,
         horizon=self.config.horizon,
         **self.config.imag_loss)
-    losses.update({k: v.mean(1).reshape((B, K)) for k, v in los.items()})
+    losses.update({k: v.mean(1).reshape((B, K)) * y_mask for k, v in los.items()})
     metrics.update(mets)
 
     # Replay
@@ -231,7 +228,8 @@ class Agent(embodied.jax.Agent):
           update=training,
           horizon=self.config.horizon,
           **self.config.repl_loss)
-      losses.update(los)
+      losses.update({k: v * y_mask[:, :-1] for k, v in los.items()})
+      assert len(mets) == 0, len(mets)
       metrics.update(prefix(mets, 'reploss'))
 
     assert set(losses.keys()) == set(self.scales.keys()), (
@@ -312,12 +310,11 @@ class Agent(embodied.jax.Agent):
   def _apply_replay_context(self, carry, data):
     (enc_carry, dyn_carry, dec_carry, prevact) = carry
     carry = (enc_carry, dyn_carry, dec_carry)
-    stepid = data['stepid']
     obs = {k: data[k] for k in self.obs_space}
     prepend = lambda x, y: jnp.concatenate([x[:, None], y[:, :-1]], 1)
     prevact = {k: prepend(prevact[k], data[k]) for k in self.act_space}
     if not self.config.replay_context:
-      return carry, obs, prevact, stepid
+      return carry, obs, prevact
 
     K = self.config.replay_context
     nested = elements.tree.nestdict(data)
@@ -380,6 +377,7 @@ class Agent(embodied.jax.Agent):
 
 
 def imag_loss(
+    y_mask,
     act, rew, con,
     policy, value, slowvalue,
     retnorm, valnorm, advnorm,
@@ -422,24 +420,30 @@ def imag_loss(
       slowreg * value.loss(sg(slowvalue.pred())))[:, :-1]
 
   ret_normed = (ret - roffset) / rscale
-  metrics['adv'] = adv.mean()
-  metrics['adv_std'] = adv.std()
-  metrics['adv_mag'] = jnp.abs(adv).mean()
-  metrics['rew'] = rew.mean()
-  metrics['con'] = con.mean()
-  metrics['ret'] = ret_normed.mean()
-  metrics['val'] = val.mean()
-  metrics['tar'] = tar_normed.mean()
-  metrics['weight'] = weight.mean()
-  metrics['slowval'] = slowval.mean()
-  metrics['ret_min'] = ret_normed.min()
-  metrics['ret_max'] = ret_normed.max()
-  metrics['ret_rate'] = (jnp.abs(ret_normed) >= 1.0).mean()
+
+  mask = jnp.broadcast_to(y_mask.reshape(-1, 1), adv.shape)
+  cnt = mask.sum()
+  maskP = jnp.broadcast_to(y_mask.reshape(-1, 1), rew.shape)
+  cntP = maskP.sum()
+
+  metrics['adv'] = (adv * mask).sum() / cnt
+  #metrics['adv_std'] = adv.std()
+  metrics['adv_mag'] = (jnp.abs(adv) * mask).sum() / cnt
+  metrics['rew'] = (rew * maskP).sum() / cntP
+  metrics['con'] = (con * maskP).sum() / cntP
+  metrics['ret'] = (ret_normed * mask).sum() / cnt
+  metrics['val'] = (val * maskP).sum() / cntP
+  metrics['tar'] = (tar_normed * mask).sum() / cnt
+  metrics['weight'] = (weight * maskP).sum() / cntP
+  metrics['slowval'] = (slowval * maskP).sum() / cntP
+  #metrics['ret_min'] = ret_normed.min()
+  #metrics['ret_max'] = ret_normed.max()
+  metrics['ret_rate'] = ((jnp.abs(ret_normed) >= 1.0) * mask).sum() / cnt
   for k in act:
-    metrics[f'ent/{k}'] = ents[k].mean()
+    metrics[f'ent/{k}'] = (ents[k] * mask).sum() / cnt
     if hasattr(policy[k], 'minent'):
       lo, hi = policy[k].minent, policy[k].maxent
-      metrics[f'rand/{k}'] = (ents[k].mean() - lo) / (hi - lo)
+      metrics[f'rand/{k}'] = ((ents[k] * mask).sum() / cnt - lo) / (hi - lo)
 
   outs = {}
   outs['ret'] = ret

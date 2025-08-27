@@ -188,9 +188,9 @@ class Agent(embodied.Agent):
         self._compile_train()
         print('Train cost analysis:')
         print(self._format_jit_stats(self._train))
-        self._compile_report()
-        print('Report cost analysis:')
-        print(self._format_jit_stats(self._report))
+        #self._compile_report()
+        #print('Report cost analysis:')
+        #print(self._format_jit_stats(self._report))
       elements.print('Done compiling!', color='yellow')
 
   def init_policy(self, batch_size):
@@ -334,7 +334,7 @@ class Agent(embodied.Agent):
         self.n_batches.value += 1
       seed = self._seeds(counter, self.train_mirrored)
       return {**data, 'seed': seed}
-    return embodied.streams.Prefetch(st, fn)
+    return fn(st)
 
   @elements.timer.section('jaxagent_save')
   def save(self):

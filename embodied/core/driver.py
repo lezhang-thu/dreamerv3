@@ -67,7 +67,11 @@ class Driver:
     logs = {k: v for k, v in obs.items() if k.startswith('log/')}
     obs = {k: v for k, v in obs.items() if not k.startswith('log/')}
     assert all(len(x) == self.length for x in obs.values()), obs
+    #print('start driver.step...')
     self.carry, acts, outs = policy(self.carry, obs, **self.kwargs)
+    #print(outs.keys())
+    #print('in driver._step')
+    #exit(0)
     assert all(k not in acts for k in outs), (
         list(outs.keys()), list(acts.keys()))
     if obs['is_last'].any():

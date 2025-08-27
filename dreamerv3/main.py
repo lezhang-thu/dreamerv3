@@ -70,7 +70,6 @@ def main(argv=None):
         bind(make_agent, config),
         bind(make_replay, config, 'replay'),
         bind(make_env, config),
-        bind(make_stream, config),
         bind(make_logger, config),
         args)
 
@@ -181,32 +180,7 @@ def make_logger(config):
 
 
 def make_replay(config, folder, mode='train'):
-  batlen = config.batch_length if mode == 'train' else config.report_length
-  consec = config.consec_train if mode == 'train' else config.consec_report
-  capacity = config.replay.size if mode == 'train' else config.replay.size / 10
-  length = consec * batlen + config.replay_context
-  assert config.batch_size * length <= capacity
-
-  directory = elements.Path(config.logdir) / folder
-  if config.replicas > 1:
-    directory /= f'{config.replica:05}'
-  kwargs = dict(
-      length=length, capacity=int(capacity), online=config.replay.online,
-      chunksize=config.replay.chunksize, directory=directory)
-
-  if config.replay.fracs.uniform < 1 and mode == 'train':
-    assert config.jax.compute_dtype in ('bfloat16', 'float32'), (
-        'Gradient scaling for low-precision training can produce invalid loss '
-        'outputs that are incompatible with prioritized replay.')
-    recency = 1.0 / np.arange(1, capacity + 1) ** config.replay.recexp
-    selectors = embodied.replay.selectors
-    kwargs['selector'] = selectors.Mixture(dict(
-        uniform=selectors.Uniform(),
-        priority=selectors.Prioritized(**config.replay.prio),
-        recency=selectors.Recency(recency),
-    ), config.replay.fracs)
-
-  return embodied.replay.Replay(**kwargs)
+  return embodied.replay.Replay(config.batch_size, config.batch_length)
 
 
 def make_env(config, index, **overrides):
