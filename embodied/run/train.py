@@ -1,3 +1,4 @@
+import random
 import collections
 from functools import partial as bind
 import pickle
@@ -59,7 +60,8 @@ def _ge_replay(
             timestamp, score, len(list_of_actions)))
         #if score > 10_000:
         #    break
-    return ge_replay
+    ge_ratio = len(action_seqs) / 1e3
+    return ge_replay, ge_ratio
 
 
 def train(
@@ -73,7 +75,8 @@ def train(
 
     agent = make_agent()
     replay = make_replay()
-    ge_replay = _ge_replay(make_ge_env, make_replay)
+    ge_replay, ge_ratio = _ge_replay(make_ge_env, make_replay)
+    print("ge_ratio: {:.4f}".format(ge_ratio))
     logger = make_logger()
 
     logdir = elements.Path(args.logdir)
@@ -145,7 +148,8 @@ def train(
             t_gen = replay_gen if state == 0 else ge_replay_gen
             x_get = next(t_gen)
             if x_get.pop("last_chunk"):
-                state = 1 - state
+                if (state == 0 and random.uniform(0, 1) < ge_ratio) or (state == 1):
+                    state = 1 - state
             batch = agent.stream(x_get)
             carry_train[0], outs, mets = agent.train(carry_train[0], batch)
             train_fps.step(batch_steps)
