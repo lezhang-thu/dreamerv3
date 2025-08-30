@@ -70,6 +70,7 @@ def main(argv=None):
         bind(make_agent, config),
         bind(make_replay, config, 'replay'),
         bind(make_env, config),
+        bind(make_ge_env, config),
         bind(make_logger, config),
         args)
 
@@ -183,6 +184,23 @@ def make_replay(config, folder, mode='train'):
   return embodied.replay.Replay(config.batch_size, config.batch_length)
 
 
+def make_ge_env(config, **overrides):
+  suite, task = config.task.split('_', 1)
+  ctor = 'embodied.envs.atarix:AtariX'
+  if isinstance(ctor, str):
+    module, cls = ctor.split(':')
+    module = importlib.import_module(module)
+    ctor = getattr(module, cls)
+  kwargs = config.env.get(suite, {})
+  kwargs.update(overrides)
+  if kwargs.pop('use_seed', False):
+    kwargs['seed'] = hash((config.seed, index)) % (2 ** 32 - 1)
+  if kwargs.pop('use_logdir', False):
+    kwargs['logdir'] = elements.Path(config.logdir) / f'env{index}'
+  env = ctor(task, **kwargs)
+  return wrap_env(env, config)
+
+
 def make_env(config, index, **overrides):
   suite, task = config.task.split('_', 1)
   if suite == 'memmaze':
@@ -194,7 +212,7 @@ def make_env(config, index, **overrides):
       'dm': 'embodied.envs.from_dmenv:FromDM',
       'crafter': 'embodied.envs.crafter:Crafter',
       'dmc': 'embodied.envs.dmc:DMC',
-      'atari': 'embodied.envs.atari:Atari',
+      'atari': 'embodied.envs.atarix:AtariX',
       'atari100k': 'embodied.envs.atari:Atari',
       'dmlab': 'embodied.envs.dmlab:DMLab',
       'minecraft': 'embodied.envs.minecraft:Minecraft',
