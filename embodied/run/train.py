@@ -134,10 +134,10 @@ def train(
     carry_train = [agent.init_train(args.batch_size)]
     #carry_report = agent.init_report(args.batch_size)
 
-    #replay_gen = replay.generator()
-    #ge_replay_gen = ge_replay.generator()
-    replay_gen = replay.uniform_traj()
-    ge_replay_gen = ge_replay.uniform_traj()
+    replay_gen = replay.generator()
+    ge_replay_gen = ge_replay.generator()
+    #replay_gen = replay.uniform_traj()
+    #ge_replay_gen = ge_replay.uniform_traj()
     state = 0
 
     def trainfn(tran, worker):
@@ -148,10 +148,11 @@ def train(
             t_gen = replay_gen if state == 0 else ge_replay_gen
             x_get = next(t_gen)
             if x_get.pop("last_chunk"):
-                if (state == 0 and random.uniform(0, 1) < ge_ratio) or (state == 1):
+                # if (state == 0 and random.uniform(0, 1) < ge_ratio) or (state == 1):
+                if True:
                     state = 1 - state
             batch = agent.stream(x_get)
-            carry_train[0], outs, mets = agent.train(carry_train[0], batch)
+            carry_train[0], outs, mets = agent.train(carry_train[0], batch, state == 0)
             train_fps.step(batch_steps)
             train_agg.add(mets, prefix='train')
 

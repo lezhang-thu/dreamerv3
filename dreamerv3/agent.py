@@ -136,18 +136,18 @@ class Agent(embodied.jax.Agent):
     #print('in agent.policy')
     return carry, act, out
 
-  def train(self, carry, data):
+  def train(self, carry, data, self_traj=True):
     carry, obs, prevact = self._apply_replay_context(carry, data)
     x_mask = data['mask']
     metrics, (carry, entries, outs, mets) = self.opt(
-        self.loss, carry, obs, prevact, x_mask, training=True, has_aux=True)
+        self.loss, carry, obs, prevact, x_mask, self_traj, training=True, has_aux=True)
     metrics.update(mets)
     self.slowval.update()
     outs = {}
     carry = (*carry, {k: data[k][:, -1] for k in self.act_space})
     return carry, outs, metrics
 
-  def loss(self, carry, obs, prevact, x_mask, training):
+  def loss(self, carry, obs, prevact, x_mask, self_traj, training):
     enc_carry, dyn_carry, dec_carry = carry
     reset = obs['is_first']
     B, T = reset.shape
@@ -213,7 +213,7 @@ class Agent(embodied.jax.Agent):
     metrics.update(mets)
 
     # Replay
-    if self.config.repval_loss:
+    if self.config.repval_loss and self_traj:
       feat = sg(repfeat, skip=self.config.repval_grad)
       last, term, rew = [obs[k] for k in ('is_last', 'is_terminal', 'reward')]
       boot = imgloss_out['ret'][:, 0].reshape(B, K)
@@ -232,8 +232,9 @@ class Agent(embodied.jax.Agent):
       assert len(mets) == 0, len(mets)
       metrics.update(prefix(mets, 'reploss'))
 
-    assert set(losses.keys()) == set(self.scales.keys()), (
-        sorted(losses.keys()), sorted(self.scales.keys()))
+    if self_traj:
+        assert set(losses.keys()) == set(self.scales.keys()), (
+            sorted(losses.keys()), sorted(self.scales.keys()))
     metrics.update({f'loss/{k}': v.mean() for k, v in losses.items()})
     loss = sum([v.mean() * self.scales[k] for k, v in losses.items()])
 

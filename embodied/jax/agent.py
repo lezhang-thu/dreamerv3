@@ -170,15 +170,26 @@ class Agent(embodied.Agent):
       self.policy_params = internal.move(
         policy_params, self.policy_params_sharding)
 
+    #self._split = jax.jit(
+    #    lambda xs: jax.tree.map(lambda x: list(x), xs),
+    #    internal.local_sharding(self.policy_sharded),
+    #    internal.local_sharding(self.policy_mirrored))
     self._split = jax.jit(
         lambda xs: jax.tree.map(lambda x: list(x), xs),
-        internal.local_sharding(self.policy_sharded),
-        internal.local_sharding(self.policy_mirrored))
+        in_shardings=internal.local_sharding(self.policy_sharded),
+        out_shardings=internal.local_sharding(self.policy_mirrored),
+    )
+    #self._stack = jax.jit(
+    #    lambda xs: jax.tree.map(
+    #        jnp.stack, xs, is_leaf=lambda x: isinstance(x, list)),
+    #    internal.local_sharding(self.policy_mirrored),
+    #    internal.local_sharding(self.policy_sharded))
     self._stack = jax.jit(
         lambda xs: jax.tree.map(
             jnp.stack, xs, is_leaf=lambda x: isinstance(x, list)),
-        internal.local_sharding(self.policy_mirrored),
-        internal.local_sharding(self.policy_sharded))
+        in_shardings=internal.local_sharding(self.policy_mirrored),
+        out_shardings=internal.local_sharding(self.policy_sharded),
+    )
 
     self._ckpt_groups = internal.grouped_ckpt_fns(
         self.params, self.jaxcfg.ckpt_chunksize)
@@ -261,7 +272,7 @@ class Agent(embodied.Agent):
     return carry, acts, outs
 
   @elements.timer.section('jaxagent_train')
-  def train(self, carry, data):
+  def train(self, carry, data, self_traj=True):
     seed = data.pop('seed')
     assert sorted(data.keys()) == sorted(self.spaces.keys()), (
         sorted(data.keys()), sorted(self.spaces.keys()))
